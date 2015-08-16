@@ -3041,3 +3041,35 @@ config KERNEL_TEXT_MPU_PROT
           sections early in boot. Read access is permitted to
           all masters; Write access is only permited to the
           secure world.
+         Allow SPEED level to be shown into specific kernel apps
+
+config MSM_LIMITER
+	bool "MSM Frequency Limiter Driver"
+	default y
+	help
+	  The MSM Frequency Limiter Driver controls max frequency limit for each CPU
+	  to desired value on suspend/resume
+
+config MSM_HOTPLUG
+	bool "MSM hotplug driver"
+	depends on HOTPLUG_CPU
+	default y
+	help
+	  The MSM hotplug driver controls on-/offlining of additional cores based
+	  on current cpu load.
+
+config INTELLI_HOTPLUG
+	bool "Intelli hotplug driver"
+	depends on HOTPLUG_CPU
+	default y
+	help
+	  An intelligent cpu hotplug driver for
+	  Low Latency Frequency Transition capable processors.
+
+config ALUCARD_HOTPLUG
+	bool "Enable alucard-hotplug cpu hotplug driver"
+	default n
+	help
+	  Generic Alucard-hotplug cpu hotplug driver for ARM SOCs
+
+endif
