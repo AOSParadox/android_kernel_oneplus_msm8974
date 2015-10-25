@@ -75,6 +75,15 @@ static u32 mdss_fb_pseudo_palette[16] = {
 
 static struct msm_mdp_interface *mdp_instance;
 
+enum fb_unblank_bl_delay {
+	FB_UNBLANK_NO_BL_DELAY,
+	FB_UNBLANK_READY_TO_UPDATE_BL,
+	FB_UNBLANK_DELAY_BL_TWO_FRAMES,
+};
+
+static enum fb_unblank_bl_delay fb_unblank;
+static void mdss_fb_unblank_bl_fallback(struct work_struct *work);
+
 static int mdss_fb_register(struct msm_fb_data_type *mfd);
 static int mdss_fb_open(struct fb_info *info, int user);
 static int mdss_fb_release(struct fb_info *info, int user);
@@ -220,11 +229,6 @@ static void mdss_fb_set_bl_brightness(struct led_classdev *led_cdev,
 	if (!IS_CALIB_MODE_BL(mfd) && (!mfd->ext_bl_ctrl || !value ||
 							!mfd->bl_level)) {
 		mutex_lock(&mfd->bl_lock);
-		/* If this is the first backlight write after powering on,
-		   wait until the first frame is committed to avoid showing
-		   any garbage left over in frame memory */
-		if (!mfd->bl_level && value && mfd->panel.type == MIPI_CMD_PANEL)
-			mfd->bl_updated = false;
 		mdss_fb_set_backlight(mfd, bl_lvl);
 		mutex_unlock(&mfd->bl_lock);
 	}
@@ -735,10 +739,8 @@ static int mdss_fb_probe(struct platform_device *pdev)
 		backlight_led.max_brightness = mfd->panel_info->brightness_max;
 		if (led_classdev_register(&pdev->dev, &backlight_led))
 			pr_err("led_classdev_register failed\n");
-		else {
+		else
 			lcd_backlight_registered = 1;
-			mfd->bl_level = backlight_led.brightness;
-		}
 	}
 
 	mdss_fb_create_sysfs(mfd);
@@ -765,6 +767,8 @@ static int mdss_fb_probe(struct platform_device *pdev)
 		mfd->mdp.splash_init_fnc(mfd);
 
 	INIT_DELAYED_WORK(&mfd->idle_notify_work, __mdss_fb_idle_notify_work);
+
+	INIT_DELAYED_WORK(&mfd->unblank_bl_work, mdss_fb_unblank_bl_fallback);
 
 	return rc;
 }
@@ -1048,9 +1052,14 @@ void mdss_fb_set_backlight(struct msm_fb_data_type *mfd, u32 bkl_lvl)
 		mfd->panel_info->cont_splash_enabled) {
 		mfd->unset_bl_level = bkl_lvl;
 		return;
+	} else if (mdss_fb_is_power_on(mfd) && mfd->panel_info->panel_dead) {
+		mfd->unset_bl_level = mfd->bl_level;
 	} else {
 		mfd->unset_bl_level = 0;
 	}
+
+	if (fb_unblank != FB_UNBLANK_NO_BL_DELAY)
+		return;
 
 	pdata = dev_get_platdata(&mfd->pdev->dev);
 
@@ -1088,6 +1097,9 @@ void mdss_fb_update_backlight(struct msm_fb_data_type *mfd)
 	struct mdss_panel_data *pdata;
 	u32 temp;
 	bool bl_notify = false;
+
+	if (fb_unblank != FB_UNBLANK_NO_BL_DELAY)
+		return;
 
 	if (mfd->unset_bl_level) {
 		mutex_lock(&mfd->bl_lock);
@@ -1217,6 +1229,7 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 	switch (blank_mode) {
 	case FB_BLANK_UNBLANK:
 		pr_debug("unblank called. cur pwr state=%d\n", cur_power_state);
+		fb_unblank = FB_UNBLANK_DELAY_BL_TWO_FRAMES;
 		ret = mdss_fb_unblank_sub(mfd);
 		break;
 
@@ -1243,6 +1256,7 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 		pr_debug("blank powerdown called. cur mode=%d, req mode=%d\n",
 			cur_power_state, req_power_state);
 		if (mdss_fb_is_power_on(mfd) && mfd->mdp.off_fnc) {
+			int bl_level_old;
 			cur_power_state = mfd->panel_power_state;
 
 			mutex_lock(&mfd->update.lock);
@@ -1256,11 +1270,16 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 
 			mfd->op_enable = false;
 			mutex_lock(&mfd->bl_lock);
+			if (mfd->bl_updated)
+				bl_level_old = mfd->bl_level;
+			else
+				bl_level_old = mfd->unset_bl_level;
 			if (mdss_panel_is_power_off(req_power_state)) {
 				/* Stop Display thread */
 				if (mfd->disp_thread)
 					mdss_fb_stop_disp_thread(mfd);
 				mdss_fb_set_backlight(mfd, 0);
+				mfd->unset_bl_level = bl_level_old;
 				mfd->bl_updated = 0;
 			}
 			mfd->panel_power_state = req_power_state;
@@ -2416,6 +2435,18 @@ static void mdss_fb_var_to_panelinfo(struct fb_var_screeninfo *var,
 	pinfo->clk_rate = var->pixclock;
 }
 
+static void mdss_fb_unblank_bl_fallback(struct work_struct *work)
+{
+	struct msm_fb_data_type *mfd = container_of(work,
+						struct msm_fb_data_type,
+						unblank_bl_work.work);
+
+	if (fb_unblank == FB_UNBLANK_READY_TO_UPDATE_BL) {
+		fb_unblank = FB_UNBLANK_NO_BL_DELAY;
+		mdss_fb_update_backlight(mfd);
+	}
+}
+
 /**
  * __mdss_fb_perform_commit() - process a frame to display
  * @mfd:	Framebuffer data structure for display
@@ -2449,8 +2480,23 @@ static int __mdss_fb_perform_commit(struct msm_fb_data_type *mfd)
 		atomic_set(&mfd->kickoff_pending, 0);
 		wake_up_all(&mfd->kickoff_wait_q);
 	}
-	if (!ret)
+
+	/*
+	 * Don't enable backlight after unblank until after 2nd frame
+	 * is committed in order to ensure that display contents are
+	 * defined and the display is fully powered on and ready to
+	 * render the frame contents.
+	 */
+	if (fb_unblank == FB_UNBLANK_DELAY_BL_TWO_FRAMES) {
+		cancel_delayed_work_sync(&mfd->unblank_bl_work);
+		fb_unblank = FB_UNBLANK_READY_TO_UPDATE_BL;
+		/* Enable backlight if next commit doesn't come within 30ms */
+		schedule_delayed_work(&mfd->unblank_bl_work,
+					msecs_to_jiffies(30));
+	} else if (!ret) {
+		fb_unblank = FB_UNBLANK_NO_BL_DELAY;
 		mdss_fb_update_backlight(mfd);
+	}
 
 	if (IS_ERR_VALUE(ret) || !sync_pt_data->flushed)
 		mdss_fb_signal_timeline(sync_pt_data);
