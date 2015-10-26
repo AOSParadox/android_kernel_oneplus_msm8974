@@ -45,13 +45,6 @@
 #define INIT_UDELAY		200
 #define MAX_UDELAY		2000
 
-/* Number of jiffies for a full thermal cycle */
-#define TH_HZ			20
-
-#ifdef CONFIG_CPU_FREQ_GOV_ELEMENTALX
-int graphics_boost = 6;
-#endif
-
 struct clk_pair {
 	const char *name;
 	uint map;
@@ -153,7 +146,6 @@ void kgsl_pwrctrl_buslevel_update(struct kgsl_device *device,
 	}
 	msm_bus_scale_client_update_request(pwr->pcl, buslevel);
 	trace_kgsl_pwrlevel(device, pwr->active_pwrlevel, buslevel);
-
 }
 EXPORT_SYMBOL(kgsl_pwrctrl_buslevel_update);
 
@@ -199,14 +191,6 @@ void kgsl_pwrctrl_pwrlevel_change(struct kgsl_device *device,
 		 * changing clock freq when the core is busy.
 		 * Idle the gpu core before changing the clock freq.
 		 */
-
-#ifdef CONFIG_CPU_FREQ_GOV_ELEMENTALX
-        graphics_boost = pwr->active_pwrlevel;
-#endif
-
-}
-EXPORT_SYMBOL(kgsl_pwrctrl_pwrlevel_change);
-
 
 		if (pwr->idle_needed == true)
 			device->ftbl->idle(device);
