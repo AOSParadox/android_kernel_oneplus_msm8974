@@ -1827,19 +1827,26 @@ void *def_taiko_mbhc_cal(void)
 	btn_low[0] = -70;
 	btn_high[0] = 50;
 	btn_low[1] = 51;
+	btn_high[1] = 67;
+	btn_low[2] = 68;
 #else
 	btn_low[0] = -50;
 	btn_high[0] = 20;
 	btn_low[1] = 21;
-#endif
 	btn_high[1] = 61;
 	btn_low[2] = 62;
+#endif
 	btn_high[2] = 104;
 	btn_low[3] = 105;
 	btn_high[3] = 148;
 	btn_low[4] = 149;
+#ifdef CONFIG_MACH_OPPO
+	btn_high[4] = 179;
+	btn_low[5] = 180;
+#else
 	btn_high[4] = 189;
 	btn_low[5] = 190;
+#endif
 	btn_high[5] = 228;
 	btn_low[6] = 229;
 #ifdef CONFIG_MACH_OPPO
@@ -3074,6 +3081,7 @@ static __devinit int msm8974_asoc_machine_probe(struct platform_device *pdev)
 		ret = -EINVAL;
 		goto err;
 	}
+
 	pdata->mclk_gpio = of_get_named_gpio(pdev->dev.of_node,
 				"qcom,cdc-mclk-gpios", 0);
 	if (pdata->mclk_gpio < 0) {
