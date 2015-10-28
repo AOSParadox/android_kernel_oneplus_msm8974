@@ -31,6 +31,15 @@
 #include "clock-krait.h"
 #include "clock.h"
 
+#ifdef CONFIG_PVS_LEVEL_INTERFACE
+int pvs_level = -1;
+module_param(pvs_level, int, S_IRUGO); 
+#endif
+#ifdef CONFIG_SPEED_LEVEL_INTERFACE
+int speed_level = -1;
+module_param(speed_level, int, S_IRUGO);
+#endif
+
 /* Clock inputs coming into Krait subsystem */
 DEFINE_FIXED_DIV_CLK(hfpll_src_clk, 1, NULL);
 DEFINE_FIXED_DIV_CLK(acpu_aux_clk, 2, NULL);
@@ -462,6 +471,10 @@ static void get_krait_bin_format_b(struct platform_device *pdev,
 		*speed = 0;
 	}
 
+#ifdef CONFIG_SPEED_LEVEL_INTERFACE
+        speed_level = *speed;
+#endif
+
 	/* Check PVS_BLOW_STATUS */
 	pte_efuse = readl_relaxed(base + 0x4) & BIT(21);
 	if (pte_efuse) {
@@ -470,6 +483,10 @@ static void get_krait_bin_format_b(struct platform_device *pdev,
 		dev_warn(&pdev->dev, "PVS bin not set. Defaulting to 0!\n");
 		*pvs = 0;
 	}
+
+#ifdef CONFIG_PVS_LEVEL_INTERFACE
+	pvs_level = *pvs;
+#endif
 
 	dev_info(&pdev->dev, "PVS version: %d\n", *pvs_ver);
 
@@ -590,27 +607,14 @@ module_param_string(table_name, table_name, sizeof(table_name), S_IRUGO);
 static unsigned int pvs_config_ver;
 module_param(pvs_config_ver, uint, S_IRUGO);
 
-#ifdef CONFIG_MACH_MSM8974_14001
-static unsigned int no_cpu_underclock;
-
-static int __init get_cpu_underclock(char *cpu_uc)
-{
-	if (!strncmp(cpu_uc, "1", 1))
-		no_cpu_underclock = 1;
-
-	return 0;
-}
-__setup("no_underclock=", get_cpu_underclock);
-#endif
-
 static int clock_krait_8974_driver_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct clk *c;
 	int speed, pvs, pvs_ver, config_ver, rows, cpu;
-	unsigned long *freq, cur_rate, aux_rate;
-	int *uv, *ua;
-	u32 *dscr, vco_mask, config_val;
+	unsigned long *freq = 0, cur_rate, aux_rate;
+	int *uv = 0, *ua = 0;
+	u32 *dscr = 0, vco_mask, config_val;
 	int ret;
 
 	vdd_l2.regulator[0] = devm_regulator_get(dev, "l2-dig");
@@ -717,16 +721,6 @@ static int clock_krait_8974_driver_probe(struct platform_device *pdev)
 			rows = ret;
 		}
 	}
-
-#ifdef CONFIG_MACH_MSM8974_14001
-	/* Underclock to 1958MHz for better UX */
-	if (!no_cpu_underclock) {
-		while (rows--) {
-			if (freq[rows - 1] == 1958400000)
-				break;
-		}
-	}
-#endif
 
 	krait_update_uv(uv, rows, pvs ? 25000 : 0);
 
