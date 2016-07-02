@@ -59,6 +59,11 @@ struct bq24196_device_info {
 struct bq24196_device_info *bq24196_di;
 struct i2c_client *bq24196_client;
 
+/* Ensure I2C bus is active for OTG */
+static bool suspended = false;
+static DECLARE_COMPLETION(resume_done);
+static DEFINE_SPINLOCK(resume_lock);
+
 static int bq24196_read_i2c(struct bq24196_device_info *di,u8 reg,u8 length,char *buf)
 {
 	struct i2c_client *client = di->client;
@@ -591,10 +596,39 @@ static const struct i2c_device_id bq24196_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, bq24196_id);
 
+static void bq24196_suspended(bool state)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&resume_lock, flags);
+	suspended = state;
+	spin_unlock_irqrestore(&resume_lock, flags);
+
+	if (!suspended)
+		complete_all(&resume_done);
+}
+
+void bq24196_wait_for_resume(void)
+{
+	unsigned long flags;
+	bool asleep;
+
+	spin_lock_irqsave(&resume_lock, flags);
+	asleep = suspended;
+	spin_unlock_irqrestore(&resume_lock, flags);
+
+	if (asleep) {
+		INIT_COMPLETION(resume_done);
+		wait_for_completion_timeout(&resume_done,
+					msecs_to_jiffies(50));
+	}
+}
+
 static int bq24196_suspend(struct device *dev) //sjc1118
 {
 	struct bq24196_device_info *chip = dev_get_drvdata(dev);
 
+	bq24196_suspended(true);
 	atomic_set(&chip->suspended, 1);
 
 	return 0;
@@ -605,6 +639,7 @@ static int bq24196_resume(struct device *dev) //sjc1118
 	struct bq24196_device_info *chip = dev_get_drvdata(dev);
 
 	atomic_set(&chip->suspended, 0);
+	bq24196_suspended(false);
 
 	return 0;
 }
