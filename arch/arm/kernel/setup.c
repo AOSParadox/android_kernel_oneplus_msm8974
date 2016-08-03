@@ -1115,7 +1115,10 @@ void __init setup_arch(char **cmdline_p)
 	}
 #endif
 	reserve_crashkernel();
-
+#ifdef CONFIG_VENDOR_EDIT_OP_LASTKMSG
+/* add by yangrujin@bsp 2015/9/2, support last_kmsg feature */
+	reserve_crashkernel_1();
+#endif
 	tcm_init();
 
 #ifdef CONFIG_MULTI_IRQ_HANDLER
